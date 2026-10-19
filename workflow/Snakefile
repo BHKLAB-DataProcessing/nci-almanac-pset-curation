@@ -1,0 +1,14 @@
+# Template only. Future DAG: download -> process -> curate -> RDS + TSV exports.
+configfile: "config/pipeline.yaml"
+
+rule all:
+    input:
+        config["outputs"]["pharmacoset"]
+
+rule curate:
+    input:
+        config="config/pipeline.yaml"
+    output:
+        pset=config["outputs"]["pharmacoset"]
+    script:
+        "scripts/curate.R"

@@ -1,0 +1,31 @@
+---
+title: "PharmacoSet QC — template"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+stop("QC template only: implement checks after source review and PSet curation.", call. = FALSE)
+```
+
+## Dataset overview
+Planned: source release, object class/version, sample/treatment counts, molecular assays and export manifest.
+
+## Structure and identifiers
+Planned: validObject(), TRE dimensions, duplicate keys, Cellosaurus/PubChem coverage, Ensembl rownames and excluded-feature audits.
+
+## Annotation coverage
+Planned: compound, cell and gene mapping coverage plus AnnotationDB miss tables.
+
+## Response and molecular assays
+Planned: units/scales, missingness, replicates, dose-response fitting and dataset-specific synergy checks where applicable.
+
+## Access examples
+Planned: readRDS(), sample/treatment metadata, molecular assays and TRE access. Inspect final outputs only; no live API calls or pipeline reruns.
+
+## Session information
+Add sessionInfo() when the report is implemented.

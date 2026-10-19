@@ -1,0 +1,21 @@
+name: Data audit
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  data-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate manifest and keep generated data out of Git
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, tomllib
+          tomllib.loads(pathlib.Path("pixi.toml").read_text())
+          files = subprocess.check_output(["git", "ls-files", "-z", "data"]).decode().split("\0")
+          generated = [f for f in files if f and pathlib.Path(f).name != "README.md"]
+          assert not generated, f"Generated/source data must not be tracked: {generated}"
+          PY

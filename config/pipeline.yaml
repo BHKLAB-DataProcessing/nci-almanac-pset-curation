@@ -1,0 +1,45 @@
+# Source candidates only; no downloads or curation are implemented.
+dataset:
+  id: "NCI_ALMANAC"
+  name: "NCI ALMANAC"
+  version: null  # Set after selecting the source releases.
+source_review:
+  status: pending
+  notes: "Review growth/viability semantics, technical replicate grouping and synergy recomputation. The legacy script imports PSet_NCI60.rds for molecular profiles; identify downloadable raw molecular/metadata sources instead of carrying that prebuilt PSet into this raw-data pipeline."
+annotationdb:
+  base_url: https://annotationdb.bhklab.ca
+software:
+  github:
+    - package: CoreGx
+      repo: bhklab/CoreGx
+      ref: HEAD
+    - package: PharmacoGx
+      repo: bhklab/PharmacoGx
+      ref: HEAD
+sources:
+  - id: "screen"
+    name: "NCI ALMANAC combination growth"
+    release: "November 2017"
+    landing_url: "https://wiki.nci.nih.gov/spaces/NCIDTPdata/pages/338237347/NCI-ALMANAC"
+    download_url: null
+    filename: "ComboDrugGrowth_Nov2017.csv"
+    format: "CSV"
+    review_status: "pending"
+    note: "Confirm current direct-download URL, exact release and checksum."
+    sha256: null  # Record after source verification.
+  - id: "molecular_metadata"
+    name: "NCI60 raw molecular data and metadata"
+    release: null
+    landing_url: null
+    download_url: null
+    filename: null
+    format: "To be selected"
+    review_status: "pending"
+    note: "Required source decision: replace the legacy prebuilt NCI60 PSet with raw sources."
+    sha256: null  # Record after source verification.
+parameters:
+  normalization: null
+  fitting: null  # Choose model, metrics and replicate handling after source review.
+outputs:
+  pharmacoset: "data/results/NCI_ALMANAC_PSet.rds"
+  tables: data/results/tables
