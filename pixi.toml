@@ -1,15 +1,20 @@
 [workspace]
-authors = ["Michael Tran <mtran256@uwo.ca>"]
+authors = ["Michael Tran <michaelcao-anh.tran@uhn.ca>"]
 channels = ["conda-forge", "bioconda"]
 name = "nci-almanac-pset-curation"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
-setup = { cmd = "Rscript --vanilla workflow/scripts/setup.R", description = "Explicitly install latest GitHub CoreGx/PharmacoGx and record resolved SHAs." }
-pipeline = { cmd = "snakemake --snakefile workflow/Snakefile --cores 1", description = "Skeleton only: deliberately stops before curation." }
-qc = { cmd = "Rscript --vanilla -e \"rmarkdown::render('workflow/qc/pset_qc.Rmd', output_file = 'pset_qc.html', output_dir = 'docs', knit_root_dir = getwd())\"", description = "Render QC once implemented; currently stops with a template message." }
-zipup = { cmd = "bash -o pipefail -c 'test -d data/results/tables && tar -cf - -C data/results tables | gzip -9 > data/results/tables.tar.gz'", description = "Archive future TSV exports; requires an existing tables directory." }
+test-naming = "Rscript --vanilla workflow/tests/test_named_pset.R && Rscript --vanilla workflow/tests/test_compatibility_v2.R"
+test-returned-fit-quality = "Rscript workflow/tests/test_returned_fit_quality.R"
+test-source-keys = "Rscript --vanilla workflow/tests/test_source_roundtrip.R"
+test-source-roundtrip = "Rscript --vanilla workflow/scripts/validate_source_roundtrip.R"
+test-qc = { cmd = "Rscript --vanilla workflow/tests/test_qc_helpers.R", description = "Test QC pair accounting, correlations and bias without running curation." }
+setup = { cmd = "Rscript --vanilla workflow/scripts/setup.R", description = "Restore tested R dependencies from renv.lock inside the locked Pixi environment." }
+pipeline = { cmd = "snakemake --snakefile workflow/Snakefile --cores 1", description = "Download public inputs, process responses and molecular profiles, and build PharmacoSet RDS." }
+qc = { cmd = "Rscript --vanilla -e \"rmarkdown::render('workflow/qc/pset_qc.Rmd', output_file = 'pset_qc.html', output_dir = 'docs', knit_root_dir = getwd())\"", description = "Render the final PharmacoSet QC report." }
+zipup = { cmd = "bash -o pipefail -c 'test -d data/results/tables && tar -cf - -C data/results tables | gzip -9 > data/results/tables.tar.gz'", description = "Archive curated TSV exports." }
 
 [dependencies]
 snakemake-minimal = ">=9.27.0,<10"
@@ -20,3 +25,20 @@ r-yaml = ">=2.3.12,<3"
 r-rmarkdown = ">=2.32,<3"
 pandoc = ">=3.12.1,<4"
 pyyaml = ">=6.0.3,<7"
+"r-data.table" = ">=1.18.6.1,<2"
+r-jsonlite = ">=2.0.0,<3"
+r-httr2 = ">=1.3.0,<2"
+r-readxl = ">=1.6.0,<2"
+r-ggplot2 = ">=4.0.3,<5"
+r-dplyr = ">=1.2.1,<2"
+r-tidyr = ">=1.3.2,<2"
+r-xml2 = ">=1.6.0,<2"
+r-curl = ">=8.0.0,<9"
+r-ragg = ">=1.5.2,<2"
+r-devtools = ">=2.5.0,<3"
+r-digest = ">=0.6.39,<0.7"
+compilers = ">=2.0.0,<3"
+pkg-config = ">=0.29.2,<0.30"
+libxml2 = ">=2.15.4,<3"
+libcurl = ">=8.23.0,<9"
+openssl = ">=3.6.5,<4"

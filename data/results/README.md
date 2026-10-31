@@ -1,5 +1,6 @@
-# End-user outputs
+# Results
 
-Expected after implementation: `NCI_ALMANAC_PSet.rds`, `tables/*.tsv`, and optional `tables.tar.gz`. No logs or debugging outputs.
+Expected files: `NCI_ALMANAC_PSet.rds`, `tables/*.tsv`, and optional `tables.tar.gz`.
 
-Approximate legacy sizes: Screening CSV: size to verify; legacy final PSet about 531 MB. Future output size is not established.
+
+The complete object is validated and explored in `docs/pset_qc.html` after assembly. Lightweight integration fixtures are internal tests only.

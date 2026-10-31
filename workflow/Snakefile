@@ -1,14 +1,35 @@
-# Template only. Future DAG: download -> process -> curate -> RDS + TSV exports.
 configfile: "config/pipeline.yaml"
+
+SOURCES = {source["id"]: source for source in config["sources"]}
+DATASET = config["dataset"]["id"]
+if len(SOURCES) != len(config["sources"]):
+    raise ValueError("Duplicate source IDs")
+if any(not {"id", "download_url"}.issubset(s) or set(s) - {"id", "download_url", "sha256", "content_sha256"} for s in SOURCES.values()):
+    raise ValueError("Each source needs id/download_url and may include sha256")
+
+def extracted(ids):
+    return [f"data/procdata/extracted/{id}/manifest.tsv" for id in ids]
+
+RESPONSE_SOURCES = {
+    "HMCL": ["screen"],
+    "NCI_ALMANAC": ["screen", "combocompoundnames_all"],
+    "GDSC_MATRIX": ["matrix_well_stats"] + [id for id in SOURCES if id.endswith("_summary")],
+    "GDSC_ANCHOR": ["original_raw", "validation_raw"],
+}[DATASET]
+MOLECULAR_SOURCES = ["gencode"] + ({
+    "HMCL": ["screen"],
+    "NCI_ALMANAC": ["molecular_target", "rnaseq_composite", "cnv_gene_summary", "methylation_gene_average", "exome_protein_function_affecting", "swath_protein"],
+    "GDSC_MATRIX": ["cmp_models", "cmp_genes", "rnaseq", "cnv", "mutations", "fusions"],
+    "GDSC_ANCHOR": ["cmp_models", "cmp_genes", "rnaseq", "cnv", "mutations", "fusions"],
+}[DATASET])
 
 rule all:
     input:
-        config["outputs"]["pharmacoset"]
+        config["outputs"]["pharmacoset"],
+        config["outputs"]["tables"] + "/samples.tsv",
+        "data/procdata/metadata/object_validation.tsv"
 
-rule curate:
-    input:
-        config="config/pipeline.yaml"
-    output:
-        pset=config["outputs"]["pharmacoset"]
-    script:
-        "scripts/curate.R"
+include: "rules/sources.smk"
+include: "rules/response.smk"
+include: "rules/molecular.smk"
+include: "rules/curate.smk"

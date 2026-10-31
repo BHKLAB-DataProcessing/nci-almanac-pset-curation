@@ -16,3 +16,9 @@ data/procdata/**
 data/results/**
 !data/results/README.md
 docs/*_qc.html
+
+__pycache__/
+*.pyc
+
+# Generated scientific QC tables and PNGs; regenerated from final artifacts.
+/docs/qc-data/

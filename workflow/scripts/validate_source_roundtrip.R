@@ -1,0 +1,8 @@
+suppressPackageStartupMessages({library(PharmacoGx);library(data.table)})
+setDTthreads(1L)
+cfg<-yaml::read_yaml('config/pipeline.yaml')
+source('workflow/scripts/check_environment.R');check_curation_environment(cfg$packages)
+source('workflow/qc/source_roundtrip.R')
+p<-readRDS(cfg$outputs$pharmacoset)
+checks<-validate_source_roundtrip(treatmentResponse(p)[['raw']],cfg)
+print(checks)

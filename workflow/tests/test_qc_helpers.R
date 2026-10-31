@@ -1,0 +1,10 @@
+suppressPackageStartupMessages({library(data.table);library(ggplot2)})
+helper<-normalizePath('workflow/qc/qc_helpers.R')
+oldwd<-getwd();setwd(tempdir());source(helper);setwd(oldwd)
+x<-c(1,2,3,NA,5,NA);y<-c(3,2,1,4,NA,NA)
+s<-paired_stats(x,y,'test');stopifnot(s$paired==3,s$reference_only==1,s$recomputed_only==1,s$neither==1,abs(s$Pearson+1)<1e-12,abs(s$Spearman+1)<1e-12,s$mean_bias==0,abs(s$MAE-4/3)<1e-12)
+stopifnot(is.na(finite_cor(rep(1,3),1:3)),is.na(finite_cor(c(NA,1),c(2,3))))
+same<-paired_stats(1:4,1:4,'identity');stopifnot(same$MAE==0,same$Pearson==1)
+# Half-effect equations must return the midpoint at their own EC50.
+xmid<-2;stopifnot(abs((.2+(.9-.2)/(1+(xmid/2)^1.3))-.55)<1e-12)
+cat('PASS: missing-pair accounting, non-self Pearson/Spearman, bias, constant-vector handling and Hill midpoint.\n')

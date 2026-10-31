@@ -1,31 +1,412 @@
 ---
-title: "PharmacoSet QC — template"
+title: "NCI ALMANAC: data overview and exploratory analysis"
+author: "Michael Tran"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+params:
+  pset_file: "data/results/NCI_ALMANAC_PSet.rds"
 output:
   html_document:
     toc: true
     toc_float: true
     toc_depth: 3
-    code_folding: hide
+    code_folding: show
 ---
 
+NCI ALMANAC profiles pairwise drug combinations across the NCI-60 cancer cell-line panel. This PharmacoSet retains 105 source NSC compound identities under 104 named treatments, measured growth, combination summaries and processed CellMiner/DTP molecular assays. This walkthrough explains the NOTZ response definition, shows practical data access, and explores combination activity, molecular coverage and between-context agreement. See the [source study](https://dtp.cancer.gov/databases_tools/nci_almanac/) for acquisition and assay details.
+
+<style>.main-container{max-width:1200px}.qc-table{overflow-x:auto;margin:1em 0}.qc-table table{font-size:12px}.qc-table th{overflow-wrap:anywhere} img{max-width:100%;height:auto} table{display:block;max-width:100%;overflow-x:auto} pre{overflow-x:auto}</style>
+
 ```{r setup, include=FALSE}
-stop("QC template only: implement checks after source review and PSet curation.", call. = FALSE)
+.libPaths(.Library)
+knitr::opts_chunk$set(results="asis", echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, dev="png", dpi=120, fig.width=9, fig.height=5)
+suppressPackageStartupMessages({library(PharmacoGx); library(MultiAssayExperiment); library(data.table); library(ggplot2)})
+theme_set(theme_minimal(base_size=12))
+source("workflow/qc/qc_helpers.R")
+cfg <- yaml::read_yaml("config/pipeline.yaml")
+cfg$outputs$pharmacoset <- params$pset_file
+source("workflow/scripts/check_environment.R")
+check_curation_environment(cfg$packages)
+stopifnot(file.exists(cfg$outputs$pharmacoset))
+pset <- readRDS(cfg$outputs$pharmacoset)
+source("workflow/scripts/portable_annotations.R")
+stopifnot(identical(annotation(pset), portable_annotations(annotation(pset))))
+tre <- treatmentResponse(pset)
+samples <- sampleInfo(pset)
+drugs <- treatmentInfo(pset)
+raw <- tre[["raw"]]
+source("workflow/qc/source_roundtrip.R")
+source_roundtrip <- validate_source_roundtrip(raw,cfg)
+invisible(gc())
 ```
 
-## Dataset overview
-Planned: source release, object class/version, sample/treatment counts, molecular assays and export manifest.
+## Getting started
 
-## Structure and identifiers
-Planned: validObject(), TRE dimensions, duplicate keys, Cellosaurus/PubChem coverage, Ensembl rownames and excluded-feature audits.
+Read the serialized PharmacoSet with PharmacoGx. Response records use identifiers from `sampleInfo()` and `treatmentInfo()`; join labels through these tables instead of assuming a display name is the stored key. Keep dose, plate and technical-context fields when selecting observations.
+
+```{r load-example, eval=FALSE, echo=TRUE}
+library(PharmacoGx)
+library(MultiAssayExperiment)
+library(data.table)
+pset <- readRDS("NCI_ALMANAC_PSet.rds")
+samples <- sampleInfo(pset)
+drugs <- treatmentInfo(pset)
+response <- treatmentResponse(pset)
+raw <- response[["raw"]]
+profiles <- response[["profiles"]]
+omics <- molecularProfilesSlot(pset)
+```
+
+## Contents and identifiers
+
+The counts distinguish physical observations from fitted or aggregated profiles. Molecular coverage varies across assays; analyses should intersect sample IDs explicitly.
+
+```{r contents}
+qc_table(data.table(dataset=cfg$dataset$name,samples=nrow(samples),source_treatments=nrow(drugs),physical_observations=nrow(raw)),"dataset-overview")
+qc_table(data.table(assay=names(tre@assays),rows=vapply(names(tre@assays),function(n)nrow(tre[[n]]),integer(1))),"response-assays")
+qc_table(as.data.table(samples)[,intersect(c("sampleid","sample_name","tissueid","Cellosaurus.Accession"),names(samples)),with=FALSE],"sample-metadata-example",n=5)
+qc_table(as.data.table(drugs)[,intersect(c("treatmentid","treatment_name","PubChem.CID"),names(drugs)),with=FALSE],"treatment-metadata-example",n=5)
+```
+
+### Select a treatment and join readable labels
+
+This example selects an observed treatment ID and adds its label without merging distinct source compounds. Replace `selected_id` with an ID from the treatment table for a specific question.
+
+```{r select-example, echo=TRUE}
+selected_id <- raw$treatment1id[[1]]
+example <- raw[treatment1id == selected_id,
+  .(sampleid, treatment1id, treatment1dose, dose_unit, viability)][1:5]
+example <- merge(example,
+  as.data.table(samples)[, .(sampleid, sample_name)], by="sampleid", all.x=TRUE)
+example <- merge(example,
+  as.data.table(drugs)[, .(treatment1id=treatmentid, treatment_name)],
+  by="treatment1id", all.x=TRUE)
+knitr::kable(example)
+```
+
+### Align a molecular assay with response samples
+
+Use the experiment's feature metadata to interpret its rows and its column metadata to interpret samples. Match by identifiers; row or column position is not a biological mapping.
+
+```{r molecular-access, echo=TRUE}
+se <- experiments(molecularProfilesSlot(pset))[["rnaseq.comp"]]
+shared_samples <- intersect(samples$sampleid, colnames(se))
+values <- SummarizedExperiment::assay(se)
+knitr::kable(data.frame(assay="rnaseq.comp", features=nrow(values),
+  shared_response_samples=length(shared_samples)))
+knitr::kable(values[seq_len(min(4,nrow(values))), head(shared_samples,4), drop=FALSE])
+```
+
+The canonical object groups the two Vemurafenib aliases into one treatment label while retaining both NSCs in the response keys. Naming does not pool observations or change fitted measurements. The RNA-seq experiment is `rnaseq.comp`, with inner assay `exprs`.
+
+
+
+## Fitted concentration convention
+
+Stored IC50 uses the relative half-effect convention (`reference="relative"`): it is not necessarily the concentration at 50% absolute viability. EC50 is the fitted midpoint. Read these values alongside the tested concentration range and curve asymptotes; extrapolated potency can be poorly identified.
+
+```{r object-checks, include=FALSE}
+
+stopifnot(methods::validObject(pset))
+stopifnot(!anyDuplicated(samples$sampleid), !anyDuplicated(drugs$treatmentid))
+validation <- fread("data/procdata/metadata/object_validation.tsv")
+stopifnot(nrow(raw) == as.integer(validation[check=="source_observations", value]),
+  all(unique(raw$sampleid) %in% samples$sampleid),
+  all(unique(na.omit(c(raw$treatment1id, raw$treatment2id))) %in% drugs$treatmentid),
+  !anyDuplicated(raw, by=CoreGx::idCols(tre)))
+
+```
 
 ## Annotation coverage
-Planned: compound, cell and gene mapping coverage plus AnnotationDB miss tables.
 
-## Response and molecular assays
-Planned: units/scales, missingness, replicates, dose-response fitting and dataset-specific synergy checks where applicable.
+Unmatched identifiers remain usable source IDs. Empty AnnotationGx fields mean that mapping method was not run; they do not indicate a negative database result.
 
-## Access examples
-Planned: readRDS(), sample/treatment metadata, molecular assays and TRE access. Inspect final outputs only; no live API calls or pipeline reruns.
+```{r annotations}
+knitr::kable(data.frame(entity=c("samples", "treatments"), total=c(nrow(samples), nrow(drugs)),
+  annotationdb_mapped=c(sum(samples$In.AnnotationDB), sum(drugs$In.AnnotationDB))))
+for (file in c("annotationdb_cell_line_misses", "annotationdb_compound_misses")) {
+  cat("\n", file, "\n")
+  print(knitr::kable(head(fread(file.path("data/procdata/metadata", paste0(file, ".tsv"))), 15)))
+}
+```
 
-## Session information
-Add sessionInfo() when the report is implemented.
+## Assay meanings and source-well retention
+
+`raw` contains imported physical-well measurements; repeated dose observations
+remain separate by source well ID. `synergy` contains derived dose-context scores.
+`profiles` summarizes combination contexts and includes their matched mono fits.
+The stable sample and treatment IDs remain unchanged; labels are in metadata.
+
+```{r assay-separation}
+stopifnot(!any(grepl("^(HSA_observed|Bliss_observed|HSA_fitted|Bliss_fitted|Loewe_E0_1|ZIP_E0_1)", names(raw))))
+knitr::kable(data.table(assay=c("raw", "synergy", "profiles"),
+  rows=vapply(c("raw", "synergy", "profiles"), function(n) nrow(tre[[n]]), integer(1))))
+if ("jaaks_msi_status" %in% names(samples)) {
+  knitr::kable(as.data.table(samples)[, .N, by=jaaks_msi_status])
+  knitr::kable(fread("data/procdata/metadata/jaaks_sample_mapping.tsv")[, .N, by=matched])
+}
+```
+
+```{r observed-scores, include=FALSE}
+sy <- tre[["synergy"]]
+for (kind in c("HSA", "Bliss")) {
+  expected <- if (kind=="HSA") pmin(sy$viability_1, sy$viability_2)-sy$viability else sy$viability_1*sy$viability_2-sy$viability
+  measured <- sy[[paste0(kind, "_observed_excess")]]
+  stopifnot(identical(is.na(expected), is.na(measured)),
+    all(abs(expected-measured)<1e-10, na.rm=TRUE))
+}
+rm(sy, expected, measured); invisible(gc())
+```
+
+## Response distributions and missing references
+
+A four-parameter Hill model requires adequate concentration support; three distinct concentrations alone cannot independently identify all four parameters. `four_parameter_dose_support` flags this limitation; it is not a guarantee of fit quality.
+
+Measured viability and fitted response summaries answer different questions. Interpret concentration units, tested ranges and missing references before comparing compounds.
+
+```{r responses}
+knitr::kable(raw[, .(observations=.N, missing_response=sum(!is.finite(viability)),
+  min_response=min(viability, na.rm=TRUE), max_response=max(viability, na.rm=TRUE))])
+set.seed(1)
+draw <- raw[sample.int(.N, min(.N, 50000))]
+ggplot(draw, aes(viability)) + geom_histogram(bins=70) + labs(x="Response fraction", y="Dose-context observations")
+fits <- fread(file.path(cfg$outputs$tables, "monotherapy_profiles.tsv"),
+  colClasses=c(sampleid="character", treatment1id="character", tech_rep="character", treatment1id_source="character"))
+fits[, NSC1 := treatment1id_source]
+knitr::kable(fits[, .N, by=fit_status])
+knitr::kable(fits[, .N, by=n_doses])
+knitr::kable(fits[, .(fits=.N, finite_IC50=sum(is.finite(IC50)),
+  finite_AAC=sum(is.finite(AAC)), finite_Rsquare=sum(is.finite(Rsquare)),
+  median_Rsquare=median(Rsquare, na.rm=TRUE), Rsquare_below_0_5=sum(Rsquare<0.5, na.rm=TRUE),
+  AAC_outside_0_1=sum(AAC<0 | AAC>1, na.rm=TRUE))])
+# Low R-square is a review flag, especially for flat/inactive curves; optimizer
+# success alone does not establish biological fit quality.
+
+if ("four_parameter_dose_support" %in% names(fits)) knitr::kable(fits[, .N, by=four_parameter_dose_support])
+```
+
+## Molecular identifiers
+
+Gene-level assays use the configured GENCODE release. DTP molecular targets retain their assay-specific feature identities.
+
+```{r molecular}
+mp <- molecularProfilesSlot(pset)
+stopifnot(all(vapply(experiments(mp), function(se) {
+  a <- S4Vectors::metadata(se)$annotation
+  length(a)==1L && !is.na(a) && nzchar(a)
+}, logical(1))))
+checks <- rbindlist(lapply(names(experiments(mp)), function(n) {
+  se <- experiments(mp)[[n]]
+  data.table(assay=n, features=nrow(se), samples=ncol(se), duplicates=sum(duplicated(rownames(se))),
+    non_ensembl=sum(!grepl("^ENSG[0-9]+$", rownames(se))))
+}))
+knitr::kable(checks)
+exclusions <- list.files("data/procdata/metadata", "_feature_mapping.tsv$", full.names=TRUE)
+knitr::kable(rbindlist(lapply(exclusions, function(p) fread(p)[, .N, by=exclusion_reason][, assay:=basename(p)])))
+```
+
+## Response landscape and fit support
+
+Physical wells, observed-reference synergy, fitted-reference synergy and curve summaries answer different questions. Positive HSA/Bliss excess means lower combination viability than the named reference. Missing fitted scores are not zero synergy. Loewe/ZIP fields explicitly retain their E0=1 assumption.
+
+```{r combo-exploration}
+cp<-copy(tre[['profiles']])
+score_cols<-intersect(c('mean_HSA_observed_excess','mean_Bliss_observed_excess','mean_HSA_fitted_excess','mean_Bliss_fitted_excess','mean_Loewe_E0_1_excess','mean_ZIP_E0_1_excess'),names(cp))
+qc_distribution(cp,score_cols,'combination-score-distributions')
+qc_table(cp[, .N, by=.(n_dose1,n_dose2,n_dose_pairs)][order(-N)],'dose-grid-coverage',n=20)
+qc_distribution(fits,intersect(c('AAC','Rsquare'),names(fits)),'mono-fit-distributions')
+qc_table(fits[,.(contexts=.N,finite_IC50=sum(is.finite(IC50)),finite_AAC=sum(is.finite(AAC)),median_R2=median(Rsquare,na.rm=TRUE),low_R2=sum(Rsquare<.5,na.rm=TRUE)),by=.(n_doses,fit_status)],'mono-fit-support')
+qc_table(paired_stats(cp$mean_Bliss_observed_excess,cp$mean_Bliss_fitted_excess,'Observed-reference vs fitted-reference mean Bliss'),'observed-fitted-Bliss')
+agreement_plots(cp$mean_Bliss_observed_excess,cp$mean_Bliss_fitted_excess,'Choice of mono reference changes Bliss','observed-fitted-Bliss')
+```
+
+This comparison measures sensitivity to the choice of monotherapy reference. It is not independent biological validation. Limited dose support and flat responses can make fitted potency uncertain even when R² is high.
+
+## Exploratory combination prioritization
+
+Average technical contexts within each cell and ordered pair (and each anchor dose for Anchor), then weight cells equally. Display the ten highest observed-reference mean-Bliss pairs measured in at least ten cells. These are descriptive candidates, not validated combinations: dose design, tissue coverage and cell selection differ.
+
+```{r combination-ranking}
+pairkeys<-c('treatment1id','treatment2id')
+if(cfg$dataset$id=='GDSC_ANCHOR')pairkeys<-c(pairkeys,'treatment2dose','anchor_doses')
+cellpair<-cp[,.(Bliss=mean(mean_Bliss_observed_excess,na.rm=TRUE),HSA=mean(mean_HSA_observed_excess,na.rm=TRUE),contexts=.N),by=c('sampleid',pairkeys)]
+ranked<-cellpair[is.finite(Bliss),.(cells=.N,mean_Bliss=mean(Bliss),median_Bliss=median(Bliss),SD_Bliss=sd(Bliss),fraction_positive=mean(Bliss>0)),by=pairkeys][cells>=10][order(-mean_Bliss)]
+labels<-setNames(as.character(drugs$treatment_name),as.character(drugs$treatmentid))
+ranked[,pair:=paste(labels[as.character(treatment1id)],'+',labels[as.character(treatment2id)])]
+if('treatment2dose'%in%names(ranked))ranked[,pair:=paste(pair,'@',signif(treatment2dose,3),'uM anchor')]
+qc_table(ranked,'pair-prioritization',n=10)
+if(nrow(ranked)) {
+ selected<-head(ranked,10);display<-merge(cellpair,selected[,c(pairkeys,'pair'),with=FALSE],by=pairkeys)
+ display[,pair:=factor(pair,levels=rev(unique(selected$pair)))]
+ qc_plot(ggplot(display,aes(pair,Bliss))+geom_boxplot(outlier.shape=NA,fill='#a9c8cf')+geom_point(position=position_jitter(width=.12,seed=1),alpha=.4,size=.7)+
+   geom_hline(yintercept=0,linetype=2)+coord_flip()+labs(x=NULL,y='Per-cell mean observed Bliss excess'),'top-pairs-per-cell',width=11,height=7)
+}
+```
+
+## Molecular coverage and sample distributions
+
+Molecular inputs come from the configured public NCI DTP and CellMiner downloads: molecular-target assays, composite RNA-seq expression, copy number, methylation, exome variants and SWATH protein. These include published processed data, not exclusively primary instrument measurements. The tables and plots describe the assays actually retained, their sample coverage and stored scales. They do not establish equivalence to the historical NCI60 object used by the peer script. The coverage chart summarizes sample counts within DTP assay families; it does not combine their measurements. All 104 assay-specific coverage records remain in the accompanying table export. The five CellMiner layers cover 59 of the 60 response samples: MDA-MB-468 has no matched profile. The source label MDA-N is left unmatched rather than treated as an alias for MDA-MB-468.
+
+```{r molecular-exploration}
+ex<-experiments(molecularProfilesSlot(pset))
+coverage<-rbindlist(lapply(names(ex),function(n){se<-ex[[n]];data.table(assay=n,features=nrow(se),samples=ncol(se),missing_screen_samples=sum(!samples$sampleid%in%colnames(se)))}))
+qc_table(coverage,'molecular-coverage')
+# Summarize coverage only; heterogeneous DTP measurements remain separate assays.
+coverage[, family:=ifelse(startsWith(assay,'dtp.'),paste('DTP',sub('_.*$','',sub('^dtp[.]','',assay))),assay)]
+family_coverage<-coverage[,.(assays=.N,min_samples=min(samples),max_samples=max(samples),median_samples=median(samples)),by=family]
+family_coverage[,label:=paste0(family,' (',assays,' assays)')]
+qc_table(family_coverage,'molecular-family-coverage')
+qc_plot(ggplot(family_coverage,aes(y=reorder(label,median_samples)))+
+  geom_segment(aes(x=min_samples,xend=max_samples,yend=reorder(label,median_samples)),linewidth=1,color='#276983')+
+  geom_point(aes(x=median_samples),size=2.5,color='#276983')+
+  geom_vline(xintercept=nrow(samples),linetype=2)+
+  scale_x_continuous(limits=c(0,nrow(samples)),breaks=seq(0,nrow(samples),10))+
+  labs(x='Response samples covered',y=NULL,title='Molecular assay coverage',
+    subtitle='Points: median coverage; lines: minimum–maximum across assays',
+    caption='Coverage is summarized; molecular measurements are not pooled. Dashed line: all response samples.'),
+  'molecular-family-coverage',width=11,height=7)
+if('rnaseq.comp'%in%names(ex)) {
+  missing_rna<-as.data.table(samples)[!sampleid%in%colnames(ex[['rnaseq.comp']]),.(sampleid,sample_name)]
+  qc_table(missing_rna,'samples-without-composite-rna')
+}
+rna_names<-grep('^(rnaseq[.]|microarray[.])',names(ex),value=TRUE,ignore.case=TRUE)
+medians<-rbindlist(lapply(rna_names,function(n){m<-SummarizedExperiment::assay(ex[[n]]);data.table(assay=n,sampleid=colnames(m),median=apply(m,2,median,na.rm=TRUE),missing_fraction=colMeans(!is.finite(m)))}))
+if(nrow(medians)) {
+ qc_table(medians,'expression-sample-distributions',show=FALSE)
+ qc_plot(ggplot(medians,aes(median))+geom_histogram(bins=30,fill='#276983')+facet_wrap(~assay,scales='free')+labs(x='Within-sample median on stored scale',y='Samples'),'expression-distributions',height=7)
+}
+rm(ex,medians);invisible(gc())
+```
+
+## ALMANAC response definition and peer concordance
+
+This build starts from public NCI source measurements and uses **PERCENTGROWTHNOTZ / 100**, preserving the unmodified fraction as `viability_reported`. Observed calculations use `viability = pmax(0, viability_reported)` without an upper cap. Curve-fitting inputs are additionally capped at one, giving [0,1]-truncated viability. Mono references are matched within sample, NSC and SCREENER/STUDY technical context; plate ID alone is insufficient. Distinct NSC identities are retained even where drug names collapse. The historical collaborator-curated PSet is used only as a comparison reference.
+
+The source-derived observed viability, mono references and HSA/Bliss were independently compared against all 2,873,514 peer combination observations. Peer agreement is not independent biological validation. NOTZ is not interchangeable with time-zero-corrected PERCENTGROWTH.
+
+```{r almanac-observed-comparison}
+path<-'data/procdata/metadata/peer_notz_full_source_observation_concordance.tsv'
+if(file.exists(path))qc_table(fread(path),'peer-observed-concordance') else cat('Full observed-source peer comparison is not available.')
+qc_table(raw[,.(records=.N,finite_reported=sum(is.finite(viability_reported)),reported_below_zero=sum(viability_reported<0,na.rm=TRUE),reported_above_one=sum(viability_reported>1,na.rm=TRUE)),by=.(monotherapy=is.na(treatment2id))],'NOTZ-response-coverage')
+```
+
+No independently published NOTZ-based IC50/AAC profile table has been established for this build. The public NCI ComboScore and EXPECTEDGROWTH fields refer to the original ALMANAC scoring convention; they are not treated as equivalent to recomputed NOTZ Bliss/HSA. The directly comparable fitted baseline here is Nikta’s held-out peer object, not an independent publication.
+
+The historical peer `computeAUC` returned complementary area on a 0–100 scale; compare peer/100 with current **AAC**, not AUC. The current free-E0 Hill model can differ from historical fixed-E0 fits. Parameter disagreement on three-dose curves is expected to be poorly identified, so perfect R² alone does not establish equivalence.
+
+
+
+## Held-out fitted-metric agreement plots
+
+These plots use unique sample/NSC/SCREENER–STUDY monotherapy contexts from both drug roles. They do not overweight a mono fit simply because it appears in many combination profiles. Compare paired values, bias and outliers together: fitted agreement is distinct from preservation of the observed measurements.
+
+```{r almanac-final-fit-plots}
+f<-'data/procdata/metadata/peer_unique_monofit_pairs.tsv'
+if(file.exists(f)) {
+ u<-fread(f)
+ for(metric in c('log10_IC50','AAC','Rsquare')) {
+   a<-u[[paste0('peer_',metric)]];b<-u[[paste0('current_',metric)]]
+   qc_table(paired_stats(a,b,paste('Peer vs current',metric)),paste0('peer-',metric,'-agreement'))
+   if(metric!='Rsquare') {
+     agreement_plots(a,b,paste('Held-out peer vs current',metric),paste0('peer-',metric),if(metric=='log10_IC50')'log10(M)' else metric)
+   } else {
+     # A very negative historical R-squared must not squash the identity plot.
+     # Retain all pairs in statistics and explicitly distinguish display zoom.
+     rd<-data.table(reference=a,recomputed=b)[is.finite(reference)&is.finite(recomputed)]
+     shown_r2<-unique(rbind(plot_subset(rd),rd[which.min(reference)],rd[which.max(reference)]))
+     qc_plot(ggplot(shown_r2,aes(reference,recomputed))+geom_point(alpha=.2,size=.6,color='#276983')+
+       geom_abline(slope=1,intercept=0,linetype=2,color='#ad4c35')+
+       labs(title='Historical and current reported R-squared: full range',
+         subtitle='Unequal axis scales; sampled pairs plus reference extremes; statistics use all finite pairs',
+         x='Historical reported R-squared',y='Current reported R-squared'),'peer-Rsquare-identity')
+     zoom_r2<-rd[reference>=0&reference<=1&recomputed>=0&recomputed<=1]
+     qc_table(data.table(finite_pairs=nrow(rd),pairs_in_display_zoom=nrow(zoom_r2),pairs_outside_display_zoom=nrow(rd)-nrow(zoom_r2)),
+       'peer-Rsquare-display-coverage')
+     qc_plot(ggplot(plot_subset(zoom_r2),aes(reference,recomputed))+geom_point(alpha=.15,size=.5,color='#276983')+
+       geom_abline(slope=1,intercept=0,linetype=2,color='#ad4c35')+coord_equal(xlim=c(0,1),ylim=c(0,1))+
+       labs(title='Reported R-squared: display zoom from 0 to 1',
+         subtitle='Display subset only; all values retained in statistics and outlier tables',
+         x='Historical reported R-squared',y='Current reported R-squared')+
+       theme(plot.margin=margin(12,12,24,12),plot.title.position='plot'),'peer-Rsquare-display-zoom',height=6)
+   }
+   ix<-head(order(abs(b-a),decreasing=TRUE,na.last=NA),15)
+   z<-u[ix,.(NSC,sample_name,tech_rep)];z[,`:=`(peer=a[ix],current=b[ix],difference=b[ix]-a[ix])]
+   qc_table(z,paste0('peer-',metric,'-outliers'),n=5)
+ }
+} else cat('Fitted paired data are pending. The held-out validation stage rerenders this report when comparisons finish.')
+```
+
+## Technical-context reproducibility
+
+A technical-context analysis uses distinct SCREENER/STUDY fits of the same sample/NSC, not repeated rows copied from combination profiles. Compare the first two lexically ordered contexts only when both fits have identical dose support; the table describes how many such comparisons are possible. These contexts may include between-study differences, not just technical noise.
+
+```{r almanac-context-agreement}
+fm<-copy(fits);setorder(fm,sampleid,treatment1id,NSC1,tech_rep)
+fm[,rep_index:=seq_len(.N),by=.(sampleid,treatment1id,NSC1)]
+qc_table(fm[,.(contexts=.N),by=.(sampleid,treatment1id,NSC1)][,.N,by=contexts],'mono-context-replication')
+# Dose bounds must match as well as counts before pairing summaries.
+ranges<-raw[is.na(treatment2id),.(dose_signature=paste(sort(unique(signif(treatment1dose,10))),collapse=';')),by=.(sampleid,treatment1id,NSC1,tech_rep)]
+fm<-merge(fm,ranges,by=c('sampleid','treatment1id','NSC1','tech_rep'))
+a<-fm[rep_index==1,.(sampleid,treatment1id,NSC1,dose_signature,AAC_1=AAC,IC50_1=IC50)]
+b<-fm[rep_index==2,.(sampleid,treatment1id,NSC1,dose_signature,AAC_2=AAC,IC50_2=IC50)]
+rep<-merge(a,b,by=c('sampleid','treatment1id','NSC1','dose_signature'))
+qc_table(paired_stats(rep$AAC_1,rep$AAC_2,'Same-cell/NSC, matched-dose first two technical contexts'),'context-AAC-agreement')
+agreement_plots(rep$AAC_1,rep$AAC_2,'Distinct SCREENER/STUDY AAC agreement','context-AAC','AAC fraction')
+```
+
+## Representative measured response surfaces
+
+Select contexts nearest the 10th, 50th and 90th percentiles of mean observed Bliss, plus the largest observed-versus-fitted mean-Bliss discrepancy. These are deterministic diagnostic examples, not selected successes. Drug orientation and technical context are preserved. For Anchor, the measured seven-dose library curve and stored four-parameter fit are shown at a fixed anchor dose; for matrices, tile colors show measured viability and observed Bliss on the actual dose grid.
+
+```{r response-examples, fig.height=8}
+selection<-cp[is.finite(mean_Bliss_observed_excess)]
+chosen<-rbindlist(lapply(c(.1,.5,.9),function(q)selection[which.min(abs(mean_Bliss_observed_excess-quantile(selection$mean_Bliss_observed_excess,q)))]))
+if(any(is.finite(selection$mean_Bliss_fitted_excess)))chosen<-rbind(chosen,selection[which.max(abs(mean_Bliss_fitted_excess-mean_Bliss_observed_excess))])
+ctx<-intersect(c('sampleid','tech_rep','plateid','matrixid','treatment1id','treatment2id','treatment2dose','anchor_doses'),names(cp))
+chosen<-unique(chosen,by=ctx)
+cell_labels<-setNames(as.character(samples$sample_name),as.character(samples$sampleid))
+chosen[,example:=paste0(seq_len(.N),': ',cell_labels[as.character(sampleid)],' | ',labels[as.character(treatment1id)],' + ',labels[as.character(treatment2id)])]
+chosen[,example:=vapply(example,function(z)paste(strwrap(z,width=42),collapse='\n'),character(1))]
+sy<-tre[['synergy']]
+shown<-merge(sy,chosen[,c(ctx,'example'),with=FALSE],by=ctx)
+qc_table(chosen[,c(ctx,'example','mean_Bliss_observed_excess','mean_Bliss_fitted_excess'),with=FALSE],'surface-selection')
+if(cfg$dataset$id=='GDSC_ANCHOR') {
+ lines<-rbindlist(lapply(seq_len(nrow(chosen)),function(i){z<-chosen[i];o<-shown[example==z$example];d<-10^seq(log10(min(o$treatment1dose)),log10(max(o$treatment1dose)),length.out=100);data.table(example=z$example,dose=d,value=PharmacoGx:::.pgx_hill_curve(log10(d),c(z$Hill_slope,z$E0,z$E_inf,log10(z$EC50))))}))
+ qc_plot(ggplot(shown,aes(treatment1dose,viability))+geom_point()+geom_line(data=lines,aes(dose,value),color='#276983')+scale_x_log10()+facet_wrap(~example,scales='free_x')+labs(x='Library concentration (uM)',y='Combination viability',subtitle='Points: observed; line: existing PharmacoGx fit at the selected anchor dose'),'selected-response-curves',height=7)
+} else {
+ shown[,`:=`(dose1=log10(treatment1dose),dose2=log10(treatment2dose))]
+ qc_plot(ggplot(shown,aes(dose1,dose2,fill=viability))+geom_tile()+facet_wrap(~example,scales='free')+scale_fill_gradient(low='white',high='#276983')+labs(x=paste('Drug 1 log10 concentration',unique(shown$dose_unit)),y='Drug 2 log10 concentration',fill='Viability'),'selected-response-surfaces',height=7)
+ qc_plot(ggplot(shown,aes(dose1,dose2,fill=Bliss_observed_excess))+geom_tile()+facet_wrap(~example,scales='free')+scale_fill_gradient2(low='#ad4c35',mid='white',high='#276983',midpoint=0)+labs(x='Drug 1 log10 concentration',y='Drug 2 log10 concentration',fill='Observed Bliss'),'selected-Bliss-surfaces',height=7)
+}
+rm(sy,shown);invisible(gc())
+```
+
+## Reported fit quality and the stored curve
+
+For these fitted profiles, `Rsquare` is calculated before the returned asymptotes are truncated to [0,1]. It uses `1 - var(residual)/var(response)`, which also removes a constant residual bias. Consequently, optimizer-reported R² need not describe the returned curve used for downstream metrics. Existing stored fit parameters and reported R² are preserved.
+
+The diagnostics evaluate the stored curve at its modeling concentrations and report both the variance-based statistic and the bias-sensitive `1 - SSE/SST`. Constant-response curves have undefined R². Negative values indicate poor fit and are retained. These are in-sample diagnostics, not tests of predictive performance or potency identifiability.
+
+```{r returned-fit-quality}
+source('workflow/qc/returned_fit_quality.R')
+returned_quality<-collect_returned_fit_quality(raw,tre,cfg$dataset$id)
+qc_table(returned_quality,'returned-fit-quality',show=FALSE)
+qc_table(returned_quality[,.(contexts=.N,
+  finite_reported=sum(is.finite(reported_Rsquare)),finite_returned=sum(is.finite(returned_variance_Rsquare)),
+  reported_returned_differ=sum(abs(difference_reported_minus_returned)>1e-8,na.rm=TRUE),
+  max_absolute_difference=if(any(is.finite(difference_reported_minus_returned)))max(abs(difference_reported_minus_returned),na.rm=TRUE) else NA_real_,
+  median_reported=median(reported_Rsquare,na.rm=TRUE),median_returned_variance=median(returned_variance_Rsquare,na.rm=TRUE),
+  reported_below_0_5=sum(reported_Rsquare<.5,na.rm=TRUE),returned_variance_below_0_5=sum(returned_variance_Rsquare<.5,na.rm=TRUE),
+  returned_SSE_below_0_5=sum(returned_SSE_Rsquare<.5,na.rm=TRUE)),by=.(assay,fit_status,asymptote_at_boundary)],'returned-fit-quality-summary')
+qc_table(head(returned_quality[is.finite(difference_reported_minus_returned)][order(-abs(difference_reported_minus_returned))],10),'returned-fit-quality-largest-discrepancies')
+rm(returned_quality);invisible(gc())
+```
+
+All other tables and plots labeled `Rsquare` or R² retain the original optimizer-reported statistic unless explicitly labeled as returned-curve diagnostics. The full diagnostic table preserves identifiers, assay, dose counts and both quality definitions for review.
+
+
+
+## Session info
+
+```{r session-info, results="markup"}
+sessionInfo()
+```

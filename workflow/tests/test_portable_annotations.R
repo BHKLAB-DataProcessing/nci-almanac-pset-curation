@@ -1,0 +1,7 @@
+source('workflow/scripts/portable_annotations.R')
+desc<-structure(list(Package='Example',Version='1.2.3',RemoteSha='exact-sha',LibPath='/local/library'),class='packageDescription',file='/local/library/Meta/package.rds')
+a<-list(name='dataset',sessionInfo=structure(list(otherPkgs=list(Example=desc),loadedOnly=NULL,BLAS='/local/libopenblas.0.dylib',LAPACK='/local/liblapack.dylib'),class='sessionInfo'))
+b<-portable_annotations(a)
+stopifnot(identical(b$name,a$name),identical(b$sessionInfo$otherPkgs$Example$Version,'1.2.3'),identical(b$sessionInfo$otherPkgs$Example$RemoteSha,'exact-sha'),is.null(attr(b$sessionInfo$otherPkgs$Example,'file')),is.null(b$sessionInfo$otherPkgs$Example$LibPath),inherits(b$sessionInfo$otherPkgs$Example,'packageDescription'),'loadedOnly'%in%names(b$sessionInfo),is.null(b$sessionInfo$loadedOnly))
+stopifnot(identical(b$sessionInfo$BLAS,'libopenblas.0.dylib'),identical(b$sessionInfo$LAPACK,'liblapack.dylib'))
+cat('PASS: local package paths removed while preserving versions, SHAs, classes and NULL entries.\n')

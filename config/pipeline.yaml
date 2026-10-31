@@ -1,45 +1,57 @@
-# Source candidates only; no downloads or curation are implemented.
+---
 dataset:
-  id: "NCI_ALMANAC"
-  name: "NCI ALMANAC"
-  version: null  # Set after selecting the source releases.
-source_review:
-  status: pending
-  notes: "Review growth/viability semantics, technical replicate grouping and synergy recomputation. The legacy script imports PSet_NCI60.rds for molecular profiles; identify downloadable raw molecular/metadata sources instead of carrying that prebuilt PSet into this raw-data pipeline."
+  id: NCI_ALMANAC
+  name: NCI ALMANAC
+  version: '2026-10-27_NOTZ'
 annotationdb:
+  mode: live
+  refresh: false
   base_url: https://annotationdb.bhklab.ca
-software:
-  github:
-    - package: CoreGx
-      repo: bhklab/CoreGx
-      ref: HEAD
-    - package: PharmacoGx
-      repo: bhklab/PharmacoGx
-      ref: HEAD
+packages:
+  CoreGx: https://github.com/bhklab/CoreGx/commit/bf6d814abd3dc0fc98f9f419f430cc6473046cb2
+  PharmacoGx: https://github.com/bhklab/PharmacoGx/commit/28c58707eece80086bee75d8ef0e8afae96389ca
 sources:
-  - id: "screen"
-    name: "NCI ALMANAC combination growth"
-    release: "November 2017"
-    landing_url: "https://wiki.nci.nih.gov/spaces/NCIDTPdata/pages/338237347/NCI-ALMANAC"
-    download_url: null
-    filename: "ComboDrugGrowth_Nov2017.csv"
-    format: "CSV"
-    review_status: "pending"
-    note: "Confirm current direct-download URL, exact release and checksum."
-    sha256: null  # Record after source verification.
-  - id: "molecular_metadata"
-    name: "NCI60 raw molecular data and metadata"
-    release: null
-    landing_url: null
-    download_url: null
-    filename: null
-    format: "To be selected"
-    review_status: "pending"
-    note: "Required source decision: replace the legacy prebuilt NCI60 PSet with raw sources."
-    sha256: null  # Record after source verification.
+- id: screen
+  download_url: https://wiki.nci.nih.gov/download/attachments/338237347/ComboDrugGrowth_Nov2017.zip?version=1&modificationDate=1510057275000&api=v2
+  sha256: 69367a8b654908ebf70a752548c8d240fda2b751336eff0241a5986628696100
+- id: combocompoundnames_all
+  download_url: https://wiki.nci.nih.gov/download/attachments/338237347/ComboCompoundNames_all.txt?version=1&modificationDate=1493822512000&api=v2
+  sha256: 8fdf7ccfc52cd9d0d7e3c106423c65fe319365c1b0837fa40a1cb6d68e9fa01b
+- id: gencode
+  download_url: https://storage.googleapis.com/annotationdb_pipeline_outputs/annotation_assets/gencode.v50.annotation.gtf.gz
+  sha256: 83fba3e9b03f0b8c958f3595c6c350adc55f468abf8b0e47b6d5284cfe13a453
+- id: cellosaurus
+  download_url: https://annotationdb.bhklab.ca/cell_line/all
+- id: molecular_target
+  download_url: https://wiki.nci.nih.gov/download/attachments/155845004/WEB_DATA_ALL_MT.ZIP?version=1&modificationDate=1378213863000&api=v2&download=true
+  sha256: db181d9bb7f2ea4ea2b49166a722c550ce77ce8fc69ca52672d5b2e957fb4d76
+- id: rnaseq_composite
+  download_url: https://discover.nci.nih.gov/cellminer/download/processeddataset/nci60_RNA__RNA_seq_composite_expression.zip
+  sha256: fe0bc1f8fda562c5ebf016c90f29e18bdf3145eebe8fda01365eb03d2200dff1
+- id: cnv_gene_summary
+  download_url: https://discover.nci.nih.gov/cellminer/download/processeddataset/nci60_DNA__Combined_aCGH_gene_summary.zip
+  sha256: 686463d64b80e001644e01fd3b8a580332043d5ef9f7f0142931532971758b9e
+- id: methylation_gene_average
+  download_url: https://discover.nci.nih.gov/cellminer/download/processeddataset/nci60_DNA__Illumina_450K_methylation_Gene_average.zip
+  sha256: 8c20253f4fb93fca9da7891e3701d7719ce9a5563beaba8623cdd1fb4e4aa0da
+- id: exome_protein_function_affecting
+  download_url: https://discover.nci.nih.gov/cellminer/download/processeddataset/nci60_DNA__Exome_Seq_Protein_function_affecting.zip
+  sha256: 150284e66ae679ac1b271747bf8fb3e36a089ec3c9cf9e5e2a3b595f015510d6
+- id: swath_protein
+  download_url: https://discover.nci.nih.gov/cellminer/download/processeddataset/nci60_Protein__SWATH_%28Mass_spectrometry%29_Protein.zip
+  sha256: 9f225030b2899084560131dbba5e92f096b946409143e777a4fbd29f22a12b32
+- id: combocompoundnames_small
+  download_url: https://wiki.nci.nih.gov/download/attachments/338237347/ComboCompoundNames_small.txt?api=v2&modificationDate=1493822467000&version=1
+  sha256: a8716065613a37ca8b71d2b9c8a0be2f2cecab0217309f63d9ca086a47b0fb07
+- id: combocompoundset
+  download_url: https://wiki.nci.nih.gov/download/attachments/338237347/ComboCompoundSet.sdf?api=v2&modificationDate=1493822360000&version=1
+  sha256: 368a4af6dcd8ede8ee3a12126ff9076db3b5ed3c13c245c16e58ed772535b8d2
 parameters:
-  normalization: null
-  fitting: null  # Choose model, metrics and replicate handling after source review.
+  fitting:
+    engine: PharmacoGx_Hill
+    min_points: 3
+    workers: 4
+    chunk_size: 500
 outputs:
-  pharmacoset: "data/results/NCI_ALMANAC_PSet.rds"
+  pharmacoset: data/results/NCI_ALMANAC_PSet.rds
   tables: data/results/tables
